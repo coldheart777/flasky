@@ -1,5 +1,8 @@
+import hashlib
+from datetime import datetime
+
 from flask_login import UserMixin, AnonymousUserMixin
-from flask import current_app
+from flask import current_app, request
 from itsdangerous import BadSignature
 
 from . import login_manager
@@ -52,6 +55,12 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(64), unique=True, index=True)
     password_hash = db.Column(db.String(128))
     confirmed = db.Column(db.Boolean, default=False)
+    name = db.Column(db.String(64))
+    location = db.Column(db.String(64))
+    about_me = db.Column(db.Text())
+    member_since = db.Column(db.DateTime(), default=datetime.utcnow)
+    last_seen = db.Column(db.DateTime(), default=datetime.utcnow)
+    avatar_hash = db.Column(db.String(32))
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'))
 
     def __init__(self, **kwargs):
@@ -61,6 +70,9 @@ class User(UserMixin, db.Model):
                 self.role = Role.query.filter_by(permissions=0xff).first()
         if self.role is None:
             self.role = Role.query.filter_by(default=True).first()
+        if self.email is not None and self.avatar_hash is None:
+            self.avatar_hash = hashlib.md5(
+                self.email.encode('utf-8')).hexdigest()
 
     def can(self, permissions):
         return self.role is not None and \
@@ -68,6 +80,11 @@ class User(UserMixin, db.Model):
 
     def is_administrator(self):
         return self.can(Permission.ADMINISTER)
+
+    def ping(self):
+        self.last_seen = datetime.utcnow()
+        db.session.add(self)
+        db.session.commit()
 
     def __repr__(self):
         return '<User %r>' % self.username
@@ -137,8 +154,18 @@ class User(UserMixin, db.Model):
         if self.query.filter_by(email=new_email).first() is not None:
             return False
         self.email = new_email
+        self.avatar_hash = hashlib.md5(
+            self.email.encode('utf-8')).hexdigest()
         db.session.add(self)
         return True
+
+    def gravatar(self, size=100, default='identicon', rating='g'):
+        url = 'https://www.gravatar.com/avatar'
+        self.email = self.email.strip()
+        self.email = self.email.lower()
+        hash = self.avatar_hash or hashlib.md5(self.email.encode('utf-8')).hexdigest()
+        return '{url}/{hash}?s={size}&d={default}&r={rating}'.format(
+            url=url, hash=hash, size=size, default=default, rating=rating)
 
 
 @login_manager.user_loader
@@ -155,6 +182,7 @@ class Permission:
 
 
 class AnonymousUser(AnonymousUserMixin):
+    confirmed = True
 
     def can(self, permissions):
         return False
